@@ -125,6 +125,7 @@ export default function Dropzone() {
     document.body.removeChild(a)
   }
   const convert = async (): Promise<any> => {
+    console.log(1, actions)
     let tmp_actions = actions.map((elt) => ({
       ...elt,
       is_converting: true,
