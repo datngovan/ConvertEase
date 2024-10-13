@@ -14,7 +14,6 @@ import { MdClose, MdDone } from "react-icons/md"
 
 import byteConvert from "@/lib/utils/byte-convert"
 import compressFileName from "@/lib/utils/compress-file-name"
-import convertFile from "@/lib/utils/convert"
 import fileToIcon from "@/lib/utils/file-to-icon"
 import { FFmpegFactory } from "@/lib/utils/load-ffmeg"
 import { Badge } from "@/components/ui/badge"
@@ -30,6 +29,13 @@ import {
   SelectValue,
 } from "./ui/select"
 import { Skeleton } from "./ui/skeleton"
+
+interface WorkerResult {
+  url: string
+  fileName: string
+  success: boolean
+  error?: string
+}
 
 const extensions = {
   image: [
@@ -106,11 +112,13 @@ export default function Dropzone() {
     setIsReady(false)
     setIsConverting(false)
   }
+
   const downloadAll = (): void => {
     for (let action of actions) {
       !action.is_error && download(action)
     }
   }
+
   const download = (action: Action) => {
     const a = document.createElement("a")
     a.style.display = "none"
@@ -124,6 +132,8 @@ export default function Dropzone() {
     URL.revokeObjectURL(action.url)
     document.body.removeChild(a)
   }
+
+  // Web Worker integration for multi-file conversion
   const convert = async (): Promise<any> => {
     console.log(1, actions)
     let tmp_actions = actions.map((elt) => ({
@@ -132,44 +142,60 @@ export default function Dropzone() {
     }))
     setActions(tmp_actions)
     setIsConverting(true)
-    for (let action of tmp_actions) {
-      try {
-        const { url, output } = await convertFile(ffmpegRef.current, action)
-        tmp_actions = tmp_actions.map((elt) =>
-          elt === action
-            ? {
-                ...elt,
-                is_converted: true,
-                is_converting: false,
-                url,
-                output,
-              }
-            : elt
-        )
-        setActions(tmp_actions)
-      } catch (err) {
-        tmp_actions = tmp_actions.map((elt) =>
-          elt === action
-            ? {
-                ...elt,
-                is_converted: false,
-                is_converting: false,
-                is_error: true,
-              }
-            : elt
-        )
-        setActions(tmp_actions)
+
+    // Create a worker for each file and handle conversions in parallel
+    const workerPromises: Promise<WorkerResult>[] = tmp_actions.map(
+      (action) => {
+        return new Promise((resolve, reject) => {
+          const worker = new Worker(
+            new URL("../lib/utils/ffmeg.worker.ts", import.meta.url)
+          )
+
+          worker.postMessage({
+            file: action.file,
+            outputFormat: action.to,
+            fileName: action.file_name,
+          })
+
+          worker.onmessage = (event: MessageEvent<any>) => {
+            const { url, fileName, success, error } = event.data
+
+            if (success) {
+              resolve({ url, fileName, success })
+            } else {
+              reject({ error, fileName })
+            }
+          }
+
+          worker.onerror = (err) => reject(err)
+        })
       }
+    )
+
+    // Wait for all conversions to complete
+    try {
+      const convertedFiles = await Promise.all(workerPromises)
+      convertedFiles.forEach(({ url, fileName }) => {
+        tmp_actions = tmp_actions.map((elt) =>
+          elt.file_name === fileName
+            ? { ...elt, is_converted: true, is_converting: false, url }
+            : elt
+        )
+        setActions(tmp_actions)
+      })
+      setIsDone(true)
+    } catch (error) {
+      console.error("Error during file conversion:", error)
+    } finally {
+      setIsConverting(false)
     }
-    setIsDone(true)
-    setIsConverting(false)
   }
+
   const handleUpload = (data: Array<any>): void => {
     handleExitHover()
     setFiles(data)
     const tmp: Action[] = []
     data.forEach((file: any) => {
-      const formData = new FormData()
       tmp.push({
         file_name: file.name,
         file_size: file.size,
@@ -184,8 +210,10 @@ export default function Dropzone() {
     })
     setActions(tmp)
   }
+
   const handleHover = (): void => setIsHover(true)
   const handleExitHover = (): void => setIsHover(false)
+
   const updateAction = (file_name: String, to: String) => {
     setActions(
       actions.map((action): Action => {
@@ -200,29 +228,49 @@ export default function Dropzone() {
         return action
       })
     )
+    checkIsReady()
   }
+
+  // const checkIsReady = (): void => {
+  //   let tmp_is_ready = true
+  //   actions.forEach((action: Action) => {
+  //     if (!action.to) tmp_is_ready = false
+  //   })
+  //   setIsReady(tmp_is_ready)
+  // }
   const checkIsReady = (): void => {
+    console.log("Checking if ready to convert...") // Add log to check when the function is called
     let tmp_is_ready = true
     actions.forEach((action: Action) => {
-      if (!action.to) tmp_is_ready = false
+      if (!action.to) {
+        console.log(`Action missing output format: ${action.file_name}`) // Log which file doesn't have an output format
+        tmp_is_ready = false
+      }
     })
+    console.log("Is ready:", tmp_is_ready) // Log the final state of `is_ready`
     setIsReady(tmp_is_ready)
   }
+
   const deleteAction = (action: Action): void => {
     setActions(actions.filter((elt) => elt !== action))
     setFiles(files.filter((elt) => elt.name !== action.file_name))
   }
+
   useEffect(() => {
+    console.log("Actions changed:", actions) // Log whenever actions are updated
     if (!actions.length) {
+      console.log("No actions, resetting state.")
       setIsDone(false)
       setFiles([])
       setIsReady(false)
       setIsConverting(false)
     } else checkIsReady()
   }, [actions])
+
   useEffect(() => {
     load()
   }, [])
+
   const load = async () => {
     const ffmpeg_response: FFmpeg = await FFmpegFactory.create()
     ffmpegRef.current = ffmpeg_response
