@@ -135,7 +135,7 @@ export default function Dropzone() {
 
   // Web Worker integration for multi-file conversion
   const convert = async (): Promise<any> => {
-    console.log(1, actions)
+    console.time("convert")
     let tmp_actions = actions.map((elt) => ({
       ...elt,
       is_converting: true,
@@ -189,6 +189,7 @@ export default function Dropzone() {
     } finally {
       setIsConverting(false)
     }
+    console.timeEnd("convert")
   }
 
   const handleUpload = (data: Array<any>): void => {
