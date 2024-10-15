@@ -14,6 +14,7 @@ import { MdClose, MdDone } from "react-icons/md"
 
 import byteConvert from "@/lib/utils/byte-convert"
 import compressFileName from "@/lib/utils/compress-file-name"
+import convertFile, { processImage } from "@/lib/utils/convert"
 import fileToIcon from "@/lib/utils/file-to-icon"
 import { FFmpegFactory } from "@/lib/utils/load-ffmeg"
 import { Badge } from "@/components/ui/badge"
@@ -135,63 +136,44 @@ export default function Dropzone() {
 
   // Web Worker integration for multi-file conversion
   const convert = async (): Promise<any> => {
-    console.time("convert")
     let tmp_actions = actions.map((elt) => ({
       ...elt,
       is_converting: true,
     }))
     setActions(tmp_actions)
     setIsConverting(true)
-
-    // Create a worker for each file and handle conversions in parallel
-    const workerPromises: Promise<WorkerResult>[] = tmp_actions.map(
-      (action) => {
-        return new Promise((resolve, reject) => {
-          const worker = new Worker(
-            new URL("../lib/utils/ffmeg.worker.ts", import.meta.url)
-          )
-
-          worker.postMessage({
-            file: action.file,
-            outputFormat: action.to,
-            fileName: action.file_name,
-          })
-
-          worker.onmessage = (event: MessageEvent<any>) => {
-            const { url, fileName, success, error } = event.data
-
-            if (success) {
-              resolve({ url, fileName, success })
-            } else {
-              reject({ error, fileName })
-            }
-          }
-
-          worker.onerror = (err) => reject(err)
-        })
-      }
-    )
-
-    // Wait for all conversions to complete
-    try {
-      const convertedFiles = await Promise.all(workerPromises)
-      convertedFiles.forEach(({ url, fileName }) => {
+    for (let action of tmp_actions) {
+      try {
+        const { url, output } = await processImage(action, 10, 10)
         tmp_actions = tmp_actions.map((elt) =>
-          elt.file_name === fileName
-            ? { ...elt, is_converted: true, is_converting: false, url }
+          elt === action
+            ? {
+                ...elt,
+                is_converted: true,
+                is_converting: false,
+                url,
+                output,
+              }
             : elt
         )
         setActions(tmp_actions)
-      })
-      setIsDone(true)
-    } catch (error) {
-      console.error("Error during file conversion:", error)
-    } finally {
-      setIsConverting(false)
+      } catch (err) {
+        tmp_actions = tmp_actions.map((elt) =>
+          elt === action
+            ? {
+                ...elt,
+                is_converted: false,
+                is_converting: false,
+                is_error: true,
+              }
+            : elt
+        )
+        setActions(tmp_actions)
+      }
     }
-    console.timeEnd("convert")
+    setIsDone(true)
+    setIsConverting(false)
   }
-
   const handleUpload = (data: Array<any>): void => {
     handleExitHover()
     setFiles(data)
@@ -201,7 +183,7 @@ export default function Dropzone() {
         file_name: file.name,
         file_size: file.size,
         from: file.name.slice(((file.name.lastIndexOf(".") - 1) >>> 0) + 2),
-        to: null,
+        to: "",
         file_type: file.type,
         file,
         is_converted: false,
@@ -215,7 +197,7 @@ export default function Dropzone() {
   const handleHover = (): void => setIsHover(true)
   const handleExitHover = (): void => setIsHover(false)
 
-  const updateAction = (file_name: String, to: String) => {
+  const updateAction = (file_name: string, to: string) => {
     setActions(
       actions.map((action): Action => {
         if (action.file_name === file_name) {
@@ -232,13 +214,6 @@ export default function Dropzone() {
     checkIsReady()
   }
 
-  // const checkIsReady = (): void => {
-  //   let tmp_is_ready = true
-  //   actions.forEach((action: Action) => {
-  //     if (!action.to) tmp_is_ready = false
-  //   })
-  //   setIsReady(tmp_is_ready)
-  // }
   const checkIsReady = (): void => {
     console.log("Checking if ready to convert...") // Add log to check when the function is called
     let tmp_is_ready = true

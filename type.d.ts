@@ -1,9 +1,9 @@
 export type Action = {
-  file: any
+  file: File
   file_name: string
   file_size: number
   from: string
-  to: String | null
+  to: string
   file_type: string
   is_converting?: boolean
   is_converted?: boolean
