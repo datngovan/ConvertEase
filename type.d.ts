@@ -3,7 +3,7 @@ export type Action = {
   file_name: string
   file_size: number
   from: string
-  to: String | null
+  to: string | undefined
   file_type: string
   is_converting?: boolean
   is_converted?: boolean
