@@ -148,6 +148,7 @@ export default function Dropzone() {
         )
         setActions(tmp_actions)
       } catch (err) {
+        console.error(err)
         tmp_actions = tmp_actions.map((elt) =>
           elt === action
             ? {
