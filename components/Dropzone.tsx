@@ -79,7 +79,7 @@ export default function Dropzone() {
   const [is_done, setIsDone] = useState<boolean>(false)
   const ffmpegRef = useRef<any>(null)
   const [defaultValues, setDefaultValues] = useState<string>("video")
-  const [selcted, setSelected] = useState<string>("...")
+  const [selected, setSelected] = useState<string>("...")
   const accepted_files = {
     "image/*": [
       ".jpg",
@@ -174,7 +174,7 @@ export default function Dropzone() {
         file_name: file.name,
         file_size: file.size,
         from: file.name.slice(((file.name.lastIndexOf(".") - 1) >>> 0) + 2),
-        to: null,
+        to: undefined,
         file_type: file.type,
         file,
         is_converted: false,
@@ -186,11 +186,10 @@ export default function Dropzone() {
   }
   const handleHover = (): void => setIsHover(true)
   const handleExitHover = (): void => setIsHover(false)
-  const updateAction = (file_name: String, to: String) => {
+  const updateAction = (file_name: string, to: string) => {
     setActions(
       actions.map((action): Action => {
         if (action.file_name === file_name) {
-          console.log("FOUND")
           return {
             ...action,
             to,
@@ -282,10 +281,9 @@ export default function Dropzone() {
                     } else if (extensions.video.includes(value)) {
                       setDefaultValues("video")
                     }
-                    setSelected(value)
                     updateAction(action.file_name, value)
                   }}
-                  value={selcted}
+                  value={action.to}
                 >
                   <SelectTrigger className="w-32 outline-none focus:outline-none focus:ring-0 text-center text-muted-foreground bg-background text-md font-medium">
                     <SelectValue placeholder="..." />
@@ -293,13 +291,18 @@ export default function Dropzone() {
                   <SelectContent className="h-fit">
                     {action.file_type.includes("image") && (
                       <div className="grid grid-cols-2 gap-2 w-fit">
-                        {extensions.image.map((elt, i) => (
-                          <div key={i} className="col-span-1 text-center">
-                            <SelectItem value={elt} className="mx-auto">
-                              {elt}
-                            </SelectItem>
-                          </div>
-                        ))}
+                        {extensions.image.map(
+                          (elt, i) =>
+                            elt !== action.from && (
+                              <SelectItem
+                                key={i}
+                                value={elt}
+                                className="mx-auto"
+                              >
+                                {elt}
+                              </SelectItem>
+                            )
+                        )}
                       </div>
                     )}
                     {action.file_type.includes("video") && (
@@ -314,24 +317,34 @@ export default function Dropzone() {
                         </TabsList>
                         <TabsContent value="video">
                           <div className="grid grid-cols-3 gap-2 w-fit">
-                            {extensions.video.map((elt, i) => (
-                              <div key={i} className="col-span-1 text-center">
-                                <SelectItem value={elt} className="mx-auto">
-                                  {elt}
-                                </SelectItem>
-                              </div>
-                            ))}
+                            {extensions.video.map(
+                              (elt, i) =>
+                                elt !== action.from && (
+                                  <SelectItem
+                                    key={i}
+                                    value={elt}
+                                    className="mx-auto"
+                                  >
+                                    {elt}
+                                  </SelectItem>
+                                )
+                            )}
                           </div>
                         </TabsContent>
                         <TabsContent value="audio">
                           <div className="grid grid-cols-3 gap-2 w-fit">
-                            {extensions.audio.map((elt, i) => (
-                              <div key={i} className="col-span-1 text-center">
-                                <SelectItem value={elt} className="mx-auto">
-                                  {elt}
-                                </SelectItem>
-                              </div>
-                            ))}
+                            {extensions.audio.map(
+                              (elt, i) =>
+                                elt !== action.from && (
+                                  <SelectItem
+                                    key={i}
+                                    value={elt}
+                                    className="mx-auto"
+                                  >
+                                    {elt}
+                                  </SelectItem>
+                                )
+                            )}
                           </div>
                         </TabsContent>
                       </Tabs>
