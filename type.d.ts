@@ -1,5 +1,5 @@
 export type Action = {
-  file: any
+  file: File
   file_name: string
   file_size: number
   from: string
