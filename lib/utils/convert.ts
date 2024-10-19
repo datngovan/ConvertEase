@@ -16,77 +16,115 @@ function removeFileExtension(file_name: string): string {
   return lastDotIndex !== -1 ? file_name.slice(0, lastDotIndex) : file_name // Remove file extension if exists
 }
 
-// export default async function convertFile(
-//   ffmpeg: FFmpeg,
-//   action: Action
-// ): Promise<{ url: string; output: string }> {
-//   const { file, to, file_name, file_type } = action
-
-//   const inputExtension = getFileExtension(file_name)
-//   let outputFileName = ""
-//   if (to === "m4v") {
-//     outputFileName = removeFileExtension(file_name) + "." + "mp4"
-//   } else {
-//     outputFileName = removeFileExtension(file_name) + "." + to
-//   }
-
-//   // Write the input file to ffmpeg memory
-//   const inputFileName = `input.${inputExtension}`
-//   const ffmpeg_cmd = FfpmegCommandFactory.getFfmpegCommand(
-//     to ? to : "mp4",
-//     inputFileName,
-//     outputFileName
-//   )
-//   try {
-//     ffmpeg.writeFile(inputFileName, await fetchFile(file))
-//     // Listen for logging events from FFmpeg
-//     ffmpeg.on("log", ({ message }) => {
-//       console.log(`[FFmpeg log]: ${message}`)
-//     })
-//     try {
-//       // Execute FFmpeg command
-//       console.log("Executing FFmpeg command:", ffmpeg_cmd)
-//       await ffmpeg.exec(ffmpeg_cmd)
-//       // List files in the root directory after conversion
-//       const directoryContents = await listDirectoryContents(ffmpeg, "/")
-//       console.log("Directory contents after conversion:", directoryContents)
-//       console.log("FFmpeg command executed successfully")
-//     } catch (error) {
-//       console.error("FFmpeg execution error: ", error)
-//     }
-//     // Read the output file from ffmpeg memory
-//     console.log("Reading output file:", outputFileName)
-//     let outputData = null
-//     try {
-//       outputData = await ffmpeg.readFile(outputFileName)
-//     } catch (error) {
-//       console.error("ReadFile Error:", error)
-//     }
-
-//     if (!outputData || outputData.length === 0) {
-//       console.error(
-//         "File conversion failed: Output file not generated or is empty"
-//       )
-//       throw new Error("File conversion failed")
-//     }
-
-//     console.log("Output file read successfully:", outputData)
-//     const blob = new Blob([outputData], { type: file_type.split("/")[0] })
-//     console.log("Blob created successfully")
-//     const url = URL.createObjectURL(blob)
-
-//     return { url, output: outputFileName }
-//   } catch (error) {
-//     console.error(error)
-//     throw new Error("File Converion fail")
-//   }
-// }
-
-export default async function convertFile(ffmpeg: FFmpeg, action: Action) {
+export default async function convertFile(
+  ffmpeg: FFmpeg,
+  action: Action
+): Promise<{ url: string; output: string }> {
+  const { to, file_name } = action
   const duration = await getFileDuration(ffmpeg, action)
-  const files = await chunkFiles(ffmpeg, 5, duration, action)
-  console.log("files: ", files)
+  const fileChunks = await chunkFiles(ffmpeg, 5, duration, action)
+  const convertedChunks: Blob[] = []
+  let outputFileName = ""
+  if (to === "mp4v") {
+    outputFileName = removeFileExtension(file_name) + "." + "mp4"
+  } else {
+    outputFileName = removeFileExtension(file_name) + "." + to
+  }
+  for (let i = 0; i < fileChunks.length; i++) {
+    const chunk = fileChunks[i]
+    // Create a unique file name for each chunk
+    const chunkInputFileName = `chunk_${i}.blob`
+    const chunkOutputFileName = `chunk_${i}.${to}`
+    ffmpeg.writeFile(chunkInputFileName, await fetchFile(chunk))
+    const ffmpeg_cmd_chunk = FfpmegCommandFactory.getFfmpegCommand(
+      to ? to : "mp4",
+      chunkInputFileName,
+      chunkOutputFileName
+    )
+    try {
+      await ffmpeg.exec(ffmpeg_cmd_chunk)
+      console.log(`Chunk ${i + 1} converted successfully.`)
+    } catch (error) {
+      console.error(`Error converting chunk ${i + 1}:`, error)
+      throw new Error(`Chunk ${i + 1} conversion failed`)
+    }
+    // Read the converted chunk
+    let convertedChunkData
+    try {
+      convertedChunkData = await ffmpeg.readFile(chunkOutputFileName)
+    } catch (error) {
+      console.error(`Error reading converted chunk ${i + 1}:`, error)
+      throw new Error(`Error reading converted chunk ${i + 1}`)
+    }
+
+    // Convert the ArrayBuffer to Blob and store it
+    const convertedBlob = new Blob([convertedChunkData], {
+      type: `video/${to}`,
+    })
+    convertedChunks.push(convertedBlob)
+
+    // Optionally clean up the virtual filesystem to save memory
+    await ffmpeg.deleteFile(chunkInputFileName)
+    await ffmpeg.deleteFile(chunkOutputFileName)
+    console.log("convertedChunks: ", convertedChunks)
+  }
+  // Reassemble the converted chunks back into one file
+  const finalBlob = new Blob(convertedChunks, { type: `video/${to}` })
+  const url = URL.createObjectURL(finalBlob)
+
+  // Return the URL to the reassembled file
+  return { url, output: outputFileName }
+  // try {
+  //   ffmpeg.writeFile(inputFileName, await fetchFile(file))
+  //   // Listen for logging events from FFmpeg
+  //   ffmpeg.on("log", ({ message }) => {
+  //     console.log(`[FFmpeg log]: ${message}`)
+  //   })
+  //   try {
+  //     // Execute FFmpeg command
+  //     console.log("Executing FFmpeg command:", ffmpeg_cmd)
+  //     await ffmpeg.exec(ffmpeg_cmd)
+  //     // List files in the root directory after conversion
+  //     const directoryContents = await listDirectoryContents(ffmpeg, "/")
+  //     console.log("Directory contents after conversion:", directoryContents)
+  //     console.log("FFmpeg command executed successfully")
+  //   } catch (error) {
+  //     console.error("FFmpeg execution error: ", error)
+  //   }
+  //   // Read the output file from ffmpeg memory
+  //   console.log("Reading output file:", outputFileName)
+  //   let outputData = null
+  //   try {
+  //     outputData = await ffmpeg.readFile(outputFileName)
+  //   } catch (error) {
+  //     console.error("ReadFile Error:", error)
+  //   }
+
+  //   if (!outputData || outputData.length === 0) {
+  //     console.error(
+  //       "File conversion failed: Output file not generated or is empty"
+  //     )
+  //     throw new Error("File conversion failed")
+  //   }
+
+  //   console.log("Output file read successfully:", outputData)
+  //   const blob = new Blob([outputData], { type: file_type.split("/")[0] })
+  //   console.log("Blob created successfully")
+  //   const url = URL.createObjectURL(blob)
+
+  //   return { url, output: outputFileName }
+  // } catch (error) {
+  //   console.error(error)
+  //   throw new Error("File Converion fail")
+  // }
 }
+
+// export default async function convertFile(ffmpeg: FFmpeg, action: Action) {
+//   const duration = await getFileDuration(ffmpeg, action)
+//   const files = await chunkFiles(ffmpeg, 5, duration, action)
+//   console.log("files: ", files)
+//   files.map((file) => console.log(file))
+// }
 
 async function getFileDuration(
   ffmpeg: FFmpeg,
@@ -208,7 +246,7 @@ async function chunkFiles(
     // Read the output chunk from the virtual filesystem
     const chunkData = ffmpeg.readFile(outputName)
     const outputBlob = new Blob([await chunkData], {
-      type: `video/${action.to}`,
+      type: action.file_type,
     })
 
     // Push the chunk Blob to the chunks array
