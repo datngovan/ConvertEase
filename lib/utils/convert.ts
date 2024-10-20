@@ -4,6 +4,7 @@ import { FFmpeg } from "@ffmpeg/ffmpeg"
 import { fetchFile } from "@ffmpeg/util"
 
 import { FfpmegCommandFactory } from "./command-factory"
+import { WorkerPool } from "./workerPool"
 
 function getFileExtension(file_name: string): string {
   const regex = /(?:\.([^.]+))?$/ // Matches the last dot and everything after it
@@ -22,116 +23,112 @@ export default async function convertFile(
 ): Promise<{ url: string; output: string }> {
   const { to, file_name } = action
   const duration = await getFileDuration(ffmpeg, action)
+  console.log("duration: ", duration)
   const fileChunks = await chunkFiles(ffmpeg, 5, duration, action)
-  const convertedChunks: Blob[] = []
+  const convertedChunks: string[] = [] // Store chunk output file names
   let outputFileName = ""
+
   if (to === "mp4v") {
     outputFileName = removeFileExtension(file_name) + "." + "mp4"
   } else {
     outputFileName = removeFileExtension(file_name) + "." + to
   }
+
+  // Convert chunks individually
   for (let i = 0; i < fileChunks.length; i++) {
     const chunk = fileChunks[i]
-    // Create a unique file name for each chunk
     const chunkInputFileName = `chunk_${i}.blob`
     const chunkOutputFileName = `chunk_${i}.${to}`
-    ffmpeg.writeFile(chunkInputFileName, await fetchFile(chunk))
+    await ffmpeg.writeFile(chunkInputFileName, await fetchFile(chunk))
+
     const ffmpeg_cmd_chunk = FfpmegCommandFactory.getFfmpegCommand(
       to ? to : "mp4",
       chunkInputFileName,
       chunkOutputFileName
     )
+
     try {
+      let log = ""
+      ffmpeg.on("log", ({ message }) => {
+        log += message + "\n"
+      })
       await ffmpeg.exec(ffmpeg_cmd_chunk)
+      console.log("log: ", log)
       console.log(`Chunk ${i + 1} converted successfully.`)
+      convertedChunks.push(chunkOutputFileName)
     } catch (error) {
       console.error(`Error converting chunk ${i + 1}:`, error)
       throw new Error(`Chunk ${i + 1} conversion failed`)
     }
-    // Read the converted chunk
-    let convertedChunkData
-    try {
-      convertedChunkData = await ffmpeg.readFile(chunkOutputFileName)
-    } catch (error) {
-      console.error(`Error reading converted chunk ${i + 1}:`, error)
-      throw new Error(`Error reading converted chunk ${i + 1}`)
+
+    // Clean up the input chunk to save memory
+    await ffmpeg.deleteFile(chunkInputFileName)
+  }
+
+  // Now concatenate the chunks using FFmpeg
+  const fileListName = "file_list.txt"
+  let fileListContent = convertedChunks
+    .map((chunk) => `file '${chunk}'`)
+    .join("\n")
+  await ffmpeg.writeFile(fileListName, fileListContent)
+
+  const concatCommand = [
+    "-f",
+    "concat",
+    "-safe",
+    "0",
+    "-i",
+    fileListName,
+    "-c",
+    "copy", // Copy streams without re-encoding
+    outputFileName,
+  ]
+
+  try {
+    let concatLog = ""
+    ffmpeg.on("log", ({ message }) => {
+      concatLog += message + "\n"
+    })
+    const concatResult = await ffmpeg.exec(concatCommand)
+
+    if (concatResult !== 0) {
+      console.error("FFmpeg concat failed with log:", concatLog)
+      throw new Error(`FFmpeg concat failed`)
     }
 
-    // Convert the ArrayBuffer to Blob and store it
-    const convertedBlob = new Blob([convertedChunkData], {
-      type: `video/${to}`,
-    })
-    convertedChunks.push(convertedBlob)
-
-    // Optionally clean up the virtual filesystem to save memory
-    await ffmpeg.deleteFile(chunkInputFileName)
-    await ffmpeg.deleteFile(chunkOutputFileName)
-    console.log("convertedChunks: ", convertedChunks)
+    console.log("Concatenation complete")
+  } catch (error) {
+    console.error("Error concatenating chunks:", error)
+    throw new Error("Chunk concatenation failed")
   }
-  // Reassemble the converted chunks back into one file
-  const finalBlob = new Blob(convertedChunks, { type: `video/${to}` })
+
+  // Read the final concatenated file
+  let finalBlobData
+  try {
+    finalBlobData = await ffmpeg.readFile(outputFileName)
+  } catch (error) {
+    console.error("Error reading concatenated file:", error)
+    throw new Error("Error reading concatenated file")
+  }
+
+  const finalBlob = new Blob([finalBlobData], { type: `video/${to}` })
   const url = URL.createObjectURL(finalBlob)
+
+  // Clean up intermediate files
+  for (const chunkFile of convertedChunks) {
+    await ffmpeg.deleteFile(chunkFile)
+  }
+  await ffmpeg.deleteFile(fileListName)
 
   // Return the URL to the reassembled file
   return { url, output: outputFileName }
-  // try {
-  //   ffmpeg.writeFile(inputFileName, await fetchFile(file))
-  //   // Listen for logging events from FFmpeg
-  //   ffmpeg.on("log", ({ message }) => {
-  //     console.log(`[FFmpeg log]: ${message}`)
-  //   })
-  //   try {
-  //     // Execute FFmpeg command
-  //     console.log("Executing FFmpeg command:", ffmpeg_cmd)
-  //     await ffmpeg.exec(ffmpeg_cmd)
-  //     // List files in the root directory after conversion
-  //     const directoryContents = await listDirectoryContents(ffmpeg, "/")
-  //     console.log("Directory contents after conversion:", directoryContents)
-  //     console.log("FFmpeg command executed successfully")
-  //   } catch (error) {
-  //     console.error("FFmpeg execution error: ", error)
-  //   }
-  //   // Read the output file from ffmpeg memory
-  //   console.log("Reading output file:", outputFileName)
-  //   let outputData = null
-  //   try {
-  //     outputData = await ffmpeg.readFile(outputFileName)
-  //   } catch (error) {
-  //     console.error("ReadFile Error:", error)
-  //   }
-
-  //   if (!outputData || outputData.length === 0) {
-  //     console.error(
-  //       "File conversion failed: Output file not generated or is empty"
-  //     )
-  //     throw new Error("File conversion failed")
-  //   }
-
-  //   console.log("Output file read successfully:", outputData)
-  //   const blob = new Blob([outputData], { type: file_type.split("/")[0] })
-  //   console.log("Blob created successfully")
-  //   const url = URL.createObjectURL(blob)
-
-  //   return { url, output: outputFileName }
-  // } catch (error) {
-  //   console.error(error)
-  //   throw new Error("File Converion fail")
-  // }
 }
-
-// export default async function convertFile(ffmpeg: FFmpeg, action: Action) {
-//   const duration = await getFileDuration(ffmpeg, action)
-//   const files = await chunkFiles(ffmpeg, 5, duration, action)
-//   console.log("files: ", files)
-//   files.map((file) => console.log(file))
-// }
 
 async function getFileDuration(
   ffmpeg: FFmpeg,
   action: Action
 ): Promise<number> {
-  console.log("action.file: ", action.file)
-  const inputFileName = "input.mp4"
+  const inputFileName = action.file_name
   const inputArrayBuffer = await action.file.arrayBuffer() // Convert the input file to ArrayBuffer
 
   // Write the input file to the virtual filesystem
@@ -157,11 +154,9 @@ async function getFileDuration(
   if (resultCode !== 0) {
     throw new Error("FFmpeg command failed.")
   }
-  console.log(ffmpegOutput)
   // Extract the duration from the collected log output (look for the Duration line)
   const durationRegex = /Duration: (\d{2}):(\d{2}):(\d{2})\.(\d+)/
   const match = durationRegex.exec(ffmpegOutput)
-  console.log("match: ", match)
   if (!match) {
     throw new Error("Unable to determine video duration.")
   }
@@ -170,15 +165,12 @@ async function getFileDuration(
   const hours = parseInt(match[1], 10)
   const minutes = parseInt(match[2], 10)
   const seconds = parseInt(match[3], 10)
-  const microseconds = parseInt(match[4], 10)
 
   // Convert to total seconds
-  const totalDuration =
-    hours * 3600 + minutes * 60 + seconds + microseconds / 1000000
+  const totalDuration = hours * 3600 + minutes * 60 + seconds
 
   // Clean up the input file after extracting metadata
-  ffmpeg.deleteFile(inputFileName)
-  console.log("totalDuration: ", totalDuration)
+  await ffmpeg.deleteFile(inputFileName)
   return totalDuration // Return the duration in seconds
 }
 
@@ -186,7 +178,6 @@ async function listDirectoryContents(ffmpeg: FFmpeg, path: string = "/") {
   try {
     // List the directory contents
     const directoryContents = await ffmpeg.listDir(path)
-    console.log(`Contents of directory "${path}":`, directoryContents)
     return directoryContents
   } catch (error) {
     console.error(`Error listing contents of directory "${path}":`, error)
@@ -204,31 +195,49 @@ async function chunkFiles(
   const inputBuffer = await action.file.arrayBuffer()
   // Write the input file directly into ffmpeg (use Blob or ArrayBuffer input)
   const inputName = action.file.name
-  console.log("inputName: ", inputName)
   ffmpeg.writeFile(inputName, new Uint8Array(inputBuffer))
 
   const chunks: Blob[] = []
-  const index = Math.round(totalDuration / chunkDuration)
+  const index = Math.ceil(totalDuration / chunkDuration)
+  console.log(index)
   for (let i = 0; i < index; i++) {
     const start = i * chunkDuration
-    const end = Math.min((i + 1) * chunkDuration, totalDuration - start)
+    const end = Math.min(start + chunkDuration, totalDuration)
     const outputName = `output_${index}.${action.to}`
+    const chunkEnd = (end - start).toString()
+    console.log("data: ", `${start} - ${chunkEnd}`)
     const args = [
+      "-analyzeduration",
+      "50M", // Reduce analyzeduration
+      "-probesize",
+      "20M", // Reduce probesize
       "-i",
       inputName,
+      "-preset",
+      "ultrafast",
       "-ss",
-      start.toString(), // Start time for this chunk
+      start.toString(),
       "-t",
-      end.toString(), // Duration of the chunk
+      chunkEnd,
       "-map_metadata",
-      "0", // Copy metadata from input
-      "-c",
-      "copy", // Copy without re-encoding
+      "0",
+      "-c:v",
+      "copy",
+      "-c:a",
+      "copy",
+      "-copyts",
+      "-c:v",
+      "libx264", // Re-encode video for the target format
+      "-c:a",
+      "aac", // Re-encode audio for the target format
+      "-pix_fmt",
+      "yuv420p", // Set pixel format
+      "-force_key_frames",
+      `expr:gte(t,n_forced*${start})`, // Ensure keyframe at the start
       "-movflags",
-      "frag_keyframe+empty_moov",
-      outputName, // Output file for each chunk
+      "frag_keyframe+empty_moov+faststart",
+      outputName,
     ]
-    console.log("args: ", args)
     let ffmpegOutput = ""
 
     ffmpeg.on("log", ({ message }) => {
@@ -252,9 +261,10 @@ async function chunkFiles(
     // Push the chunk Blob to the chunks array
     chunks.push(outputBlob)
     // Remove the chunk file from the virtual filesystem to free memory
-    ffmpeg.deleteFile(outputName)
+    await ffmpeg.deleteFile(outputName)
+    // Ensure memory is freed up
   }
   // Remove the input file from the virtual filesystem
-  ffmpeg.deleteFile(inputName)
+  await ffmpeg.deleteFile(inputName)
   return chunks
 }
