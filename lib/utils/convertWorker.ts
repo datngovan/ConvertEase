@@ -39,12 +39,6 @@ self.onmessage = async function (e: MessageEvent<WorkerMessage>) {
       })
     } else if (outputFile instanceof Uint8Array) {
       // Handle the case where the output is Uint8Array (binary data)
-      console.log("data From worker: ", {
-        success: true,
-        outputFileName: outputName,
-        log: log,
-        outputFile, // Send Uint8Array containing the file data
-      })
       self.postMessage(
         {
           success: true,
