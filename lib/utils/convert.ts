@@ -1,10 +1,13 @@
 // imports
+
+import { rejects } from "assert"
+import { resolve } from "path"
 import { Action } from "@/type"
 import { FFmpeg } from "@ffmpeg/ffmpeg"
 import { fetchFile } from "@ffmpeg/util"
 
 import { FfpmegCommandFactory } from "./command-factory"
-import { WorkerPool } from "./workerPool"
+import { WorkerPool } from "./worker-pool"
 
 function getFileExtension(file_name: string): string {
   const regex = /(?:\.([^.]+))?$/ // Matches the last dot and everything after it
@@ -25,7 +28,7 @@ export default async function convertFile(
   const duration = await getFileDuration(ffmpeg, action)
   console.log("duration: ", duration)
   const fileChunks = await chunkFiles(ffmpeg, 5, duration, action)
-  const convertedChunks: string[] = [] // Store chunk output file names
+  // const convertedChunks: string[] = [] // Store chunk output file names
   let outputFileName = ""
 
   if (to === "mp4v") {
@@ -33,44 +36,113 @@ export default async function convertFile(
   } else {
     outputFileName = removeFileExtension(file_name) + "." + to
   }
-
+  // async function convertChunkswithWorker(fileChunks: Blob[],  to: string) {
+  //   const convertedChunks: string[] = [];
+  // }
   // Convert chunks individually
-  for (let i = 0; i < fileChunks.length; i++) {
-    const chunk = fileChunks[i]
+  // const worker = new Worker(new URL("./convertWorker.ts", import.meta.url))
+  const workerPool = new WorkerPool(3)
+  workerPool.init()
+  console.log(workerPool.workers)
+  const taskPromises = fileChunks.map((chunk, i) => {
     const chunkInputFileName = `chunk_${i}.blob`
     const chunkOutputFileName = `chunk_${i}.${to}`
-    await ffmpeg.writeFile(chunkInputFileName, await fetchFile(chunk))
-
     const ffmpeg_cmd_chunk = FfpmegCommandFactory.getFfmpegCommand(
       to ? to : "mp4",
       chunkInputFileName,
       chunkOutputFileName
     )
 
-    try {
-      let log = ""
-      ffmpeg.on("log", ({ message }) => {
-        log += message + "\n"
+    return workerPool.addTask(async (worker) => {
+      // Convert the chunk using the worker
+      const result = await convertChunkWithWorker(worker, {
+        fileChunk: chunk,
+        inputName: chunkInputFileName,
+        outputName: chunkOutputFileName,
+        ffmpegCommand: ffmpeg_cmd_chunk,
       })
-      await ffmpeg.exec(ffmpeg_cmd_chunk)
-      console.log("log: ", log)
-      console.log(`Chunk ${i + 1} converted successfully.`)
-      convertedChunks.push(chunkOutputFileName)
-    } catch (error) {
-      console.error(`Error converting chunk ${i + 1}:`, error)
-      throw new Error(`Chunk ${i + 1} conversion failed`)
-    }
 
-    // Clean up the input chunk to save memory
-    await ffmpeg.deleteFile(chunkInputFileName)
-  }
+      console.log("result: ", result)
 
+      if (result.success) {
+        console.log(`Chunk ${i + 1} converted successfully.`)
+
+        // Write the output file (Uint8Array) back to FFmpeg's virtual file system
+        await ffmpeg.writeFile(result.outputFileName, result.outputFile)
+
+        return result.outputFileName // Return the output file name to be used later
+      } else {
+        throw new Error(`Chunk ${i + 1} conversion failed: ${result.error}`)
+      }
+    })
+  })
+
+  // Wait for all tasks to finish and collect output file names
+  const convertedChunks = await Promise.all(taskPromises)
+  console.log("convertedChunks: ", convertedChunks)
+  // for (let i = 0; i < fileChunks.length; i++) {
+  //   const chunk = fileChunks[i]
+  //   const chunkInputFileName = `chunk_${i}.blob`
+  //   const chunkOutputFileName = `chunk_${i}.${to}`
+  //   const ffmpeg_cmd_chunk = FfpmegCommandFactory.getFfmpegCommand(
+  //     to ? to : "mp4",
+  //     chunkInputFileName,
+  //     chunkOutputFileName
+  //   )
+
+  //   await ffmpeg.writeFile(chunkInputFileName, await fetchFile(chunk))
+  //   workerPool.addTask(() => {
+  //     return new Promise(async (resolve, reject) => {
+  //       const worker = workerPool.workers[i % 3]
+  //       try {
+  //         const result = await convertChunkWithWorker(worker, {
+  //           fileChunk: chunk,
+  //           inputName: chunkInputFileName,
+  //           outputName: chunkOutputFileName,
+  //           ffmpegCommand: ffmpeg_cmd_chunk,
+  //         })
+  //         console.log("result: ", result)
+  //         if (result.success) {
+  //           console.log(`Chunk ${i + 1} converted successfully.`)
+  //           await ffmpeg.writeFile(result.outputFileName, result.outputFile)
+  //           convertedChunks.push(result.outputFileName)
+  //           resolve()
+  //         } else {
+  //           reject(
+  //             new Error(`Chunk ${i + 1} conversion failed: ${result.error}`)
+  //           )
+  //         }
+  //       } catch (error) {
+  //         console.error(`Error converting chunk ${i + 1}:`, error)
+  //         throw new Error(`Chunk ${i + 1} conversion failed`)
+  //       }
+  //     })
+  //   })
+  //   // Clean up the input chunk to save memory
+  //   await ffmpeg.deleteFile(chunkInputFileName)
+  //   // List directory contents
+  //   const directoryContents = await ffmpeg.listDir("/")
+  //   console.log("Directory Contents:", directoryContents)
+  // }
+
+  // // Once all tasks are complete, terminate the workers
+  // Promise.all(workerPool.taskQueue).then(() => {
+  //   workerPool.terminateAll()
+  //   console.log("All chunks converted and workers terminated.")
+  // })
   // Now concatenate the chunks using FFmpeg
   const fileListName = "file_list.txt"
   let fileListContent = convertedChunks
     .map((chunk) => `file '${chunk}'`)
     .join("\n")
-  await ffmpeg.writeFile(fileListName, fileListContent)
+  console.log("fileListContent: ", fileListContent)
+  await ffmpeg.writeFile(
+    fileListName,
+    new TextEncoder().encode(fileListContent)
+  )
+  // Log directory contents after writing the input file
+  const listAfterWrite = await ffmpeg.listDir("/")
+  console.log("Directory after input file is written:", listAfterWrite)
 
   const concatCommand = [
     "-f",
@@ -83,6 +155,7 @@ export default async function convertFile(
     "copy", // Copy streams without re-encoding
     outputFileName,
   ]
+  console.log("concatCommand: ", concatCommand)
 
   try {
     let concatLog = ""
@@ -267,4 +340,32 @@ async function chunkFiles(
   // Remove the input file from the virtual filesystem
   await ffmpeg.deleteFile(inputName)
   return chunks
+}
+/**
+ * TODO later edit the data type
+ * @param worker
+ * @param data
+ */
+function convertChunkWithWorker(worker: Worker, data: any): Promise<any> {
+  return new Promise((resolve, reject) => {
+    worker.onmessage = (e: MessageEvent) => {
+      const { success, outputFile, outputFileName, log } = e.data
+
+      if (success) {
+        console.log("Chunk conversion success:", log)
+        resolve({ success: true, outputFile, outputFileName })
+      } else {
+        console.error("Chunk conversion failed:", e.data.error)
+        reject(new Error(e.data.error))
+      }
+    }
+
+    worker.onerror = (err) => {
+      console.error("Worker error:", err.message)
+      reject(new Error(`Worker error: ${err.message}`))
+    }
+
+    // Send data to the worker for chunk conversion
+    worker.postMessage(data)
+  })
 }
