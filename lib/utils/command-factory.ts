@@ -14,6 +14,8 @@ export class FfpmegCommandFactory {
           "mpeg4", // MPEG-4 Visual codec for MP4V
           "-acodec",
           "aac", // AAC codec for audio
+          "-preset",
+          "ultrafast",
           outputFileName,
         ]
       case "3gp":
@@ -36,6 +38,8 @@ export class FfpmegCommandFactory {
           "8000",
           "-ab",
           "24k",
+          "-preset",
+          "ultrafast",
           outputFileName,
         ]
       case "3g2":
@@ -56,10 +60,12 @@ export class FfpmegCommandFactory {
           "8000", // Sample rate for mobile audio
           "-ab",
           "24k", // Set audio bitrate
+          "-preset",
+          "ultrafast",
           outputFileName,
         ]
       default:
-        return ["-i", inputFileName, outputFileName] // Default command for unknown formats
+        return ["-i", inputFileName, "-preset", "ultrafast", outputFileName] // Default command for unknown formats
     }
   }
 }

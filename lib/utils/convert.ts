@@ -1,5 +1,6 @@
 import { Action } from "@/type"
 import { FFmpeg } from "@ffmpeg/ffmpeg"
+import mediaInfoFactory from "mediainfo.js"
 
 import { FfpmegCommandFactory } from "./command-factory"
 import { WorkerPool } from "./worker-pool"
@@ -53,9 +54,18 @@ export default async function convertFile(
   ffmpeg: FFmpeg,
   action: Action
 ): Promise<convertOutput> {
+  console.time("convert")
   const { to, file_name } = action
-  const duration = await getFileDuration(ffmpeg, action)
-  const fileChunks = await chunkFiles(ffmpeg, 5, duration, action)
+  // console.time("get duration")
+  // const duration = await getFileDuration(ffmpeg, action)
+  // console.timeEnd("get duration")
+  console.time("get duration better")
+  const duration1 = await getFileMetadata(action.file)
+  console.log("meta data: ", duration1)
+  console.timeEnd("get duration better")
+  console.time("get chunks")
+  const fileChunks = await chunkFiles(ffmpeg, duration1 / 3, duration1, action)
+  console.timeEnd("get chunks")
   let outputFileName = ""
 
   if (to === "mp4v") {
@@ -83,6 +93,7 @@ export default async function convertFile(
   }
   await ffmpeg.deleteFile(fileListName)
 
+  console.timeEnd("convert")
   // Return the URL to the reassembled file
   return { url, output: outputFileName }
 }
@@ -248,6 +259,43 @@ async function getFileDuration(
 }
 
 /**
+ * Get the duration and other metadata of a media file using MediaInfo.js.
+ * @param file The media file (audio/video).
+ * @returns Metadata including duration in seconds and other properties.
+ */
+export async function getFileMetadata(file: File) {
+  // Create the MediaInfo instance
+  const mediaInfo = await mediaInfoFactory({
+    format: "object", // Output the result as an object
+    locateFile: (path: string) => `/MediaInfoModule.wasm`, // WASM location in public folder
+  })
+
+  // Analyze the file using the size and chunk reading method
+  const result = await mediaInfo.analyzeData(
+    () => file.size, // Function to get the file size
+    async (size: number, offset: number) => {
+      // Function to read the file as a Uint8Array for MediaInfo to process
+      const chunk = file.slice(offset, offset + size) // Get a file slice
+      const arrayBuffer = await chunk.arrayBuffer() // Convert it to ArrayBuffer
+      return new Uint8Array(arrayBuffer) // Convert to Uint8Array and return
+    }
+  )
+  // Ensure result.media and tracks are defined
+  if (!result.media || !result.media.track) {
+    throw new Error("Media information is not available.")
+  }
+  const generalTrack = result.media.track.find(
+    (track) => track["@type"] === "General"
+  )
+  if (!generalTrack || !generalTrack.Duration) {
+    throw new Error("Duration not found in the 'General' track")
+  }
+  // Return the duration in seconds (it's already provided in seconds in your data)
+  const durationInSeconds = generalTrack.Duration
+  return durationInSeconds
+}
+
+/**
  * Chunk file into small chunk if audio/video
  * @param ffmpeg FFmpeg instance.
  * @param chunkDuration Chunk duration.
@@ -260,25 +308,31 @@ async function chunkFiles(
   chunkDuration: number,
   totalDuration: number,
   action: Action
-) {
+): Promise<Blob[]> {
   // Load the input file from the Blob
   const inputBuffer = await action.file.arrayBuffer()
-  // Write the input file directly into ffmpeg (use Blob or ArrayBuffer input)
   const inputName = action.file.name
-  ffmpeg.writeFile(inputName, new Uint8Array(inputBuffer))
+  const numberOfChunks = Math.ceil(totalDuration / chunkDuration)
 
-  const chunks: Blob[] = []
-  const index = Math.ceil(totalDuration / chunkDuration)
-  for (let i = 0; i < index; i++) {
+  // Write the input file directly into FFmpeg (use Blob or ArrayBuffer input)
+  await ffmpeg.writeFile(inputName, new Uint8Array(inputBuffer))
+
+  const workerPool = new WorkerPool(4) // Create a WorkerPool with 4 workers (adjust as needed)
+  workerPool.init()
+
+  const chunkPromises: Promise<any>[] = []
+
+  for (let i = 0; i < numberOfChunks; i++) {
     const start = i * chunkDuration
     const end = Math.min(start + chunkDuration, totalDuration)
-    const outputName = `output_${index}.${action.to}`
+    const outputName = `output_${i}.${action.to}`
     const chunkEnd = (end - start).toString()
+
     const args = [
       "-analyzeduration",
-      "50M", // Reduce analyzeduration
+      "50M",
       "-probesize",
-      "20M", // Reduce probesize
+      "20M",
       "-i",
       inputName,
       "-preset",
@@ -293,49 +347,132 @@ async function chunkFiles(
       "copy",
       "-c:a",
       "copy",
-      "-copyts",
-      "-c:v",
-      "libx264", // Re-encode video for the target format
-      "-c:a",
-      "aac", // Re-encode audio for the target format
-      "-pix_fmt",
-      "yuv420p", // Set pixel format
-      "-force_key_frames",
-      `expr:gte(t,n_forced*${start})`, // Ensure keyframe at the start
-      "-movflags",
-      "frag_keyframe+empty_moov+faststart",
       outputName,
     ]
-    let ffmpegOutput = ""
 
-    ffmpeg.on("log", ({ message }) => {
-      // We're interested in the error logs
-      ffmpegOutput += message + "\n" // Capture the log output
+    // Add task to worker pool for each chunk
+    const chunkPromise = workerPool.addTask(async (worker) => {
+      let ffmpegOutput = ""
+
+      // Listen for logs from FFmpeg
+      ffmpeg.on("log", ({ message }) => {
+        ffmpegOutput += message + "\n"
+      })
+
+      // Execute the FFmpeg command
+      const result = await ffmpeg.exec(args)
+      if (result !== 0) {
+        console.error("FFmpeg command failed with code:", result)
+        console.error("FFmpeg log output:", ffmpegOutput)
+        throw new Error(`FFmpeg fails with code ${result}`)
+      }
+
+      // Read the output chunk from the virtual filesystem
+      const chunkData = await ffmpeg.readFile(outputName)
+      const outputBlob = new Blob([chunkData], { type: action.file_type })
+
+      // Clean up virtual file system to free memory
+      await ffmpeg.deleteFile(outputName)
+
+      return outputBlob
     })
 
-    // Create each chunk based on start time and duration
-    const result = await ffmpeg.exec(args)
-    if (result !== 0) {
-      console.error("FFmpeg command failed with code:", result)
-      console.error("FFmpeg log output:", ffmpegOutput)
-      throw new Error(`FFmpeg fails with code ${result}`)
-    }
-    // Read the output chunk from the virtual filesystem
-    const chunkData = ffmpeg.readFile(outputName)
-    const outputBlob = new Blob([await chunkData], {
-      type: action.file_type,
-    })
-
-    // Push the chunk Blob to the chunks array
-    chunks.push(outputBlob)
-    // Remove the chunk file from the virtual filesystem to free memory
-    await ffmpeg.deleteFile(outputName)
-    // Ensure memory is freed up
+    chunkPromises.push(chunkPromise)
   }
-  // Remove the input file from the virtual filesystem
+
+  // Wait for all chunk processing tasks to complete
+  const chunks = await Promise.all(chunkPromises)
+
+  // Clean up the input file after processing all chunks
   await ffmpeg.deleteFile(inputName)
+
+  // Terminate all workers after tasks are complete
+  workerPool.terminateAll()
+
   return chunks
 }
+
+// async function chunkFiles(
+//   ffmpeg: FFmpeg,
+//   chunkDuration: number,
+//   totalDuration: number,
+//   action: Action
+// ): Promise<Blob[]> {
+//   // Load the input file from the Blob
+//   const inputBuffer = await action.file.arrayBuffer()
+//   // Write the input file directly into ffmpeg (use Blob or ArrayBuffer input)
+//   const inputName = action.file.name
+//   ffmpeg.writeFile(inputName, new Uint8Array(inputBuffer))
+
+//   const chunks: Blob[] = []
+//   const index = Math.ceil(totalDuration / chunkDuration)
+//   for (let i = 0; i < index; i++) {
+//     const start = i * chunkDuration
+//     const end = Math.min(start + chunkDuration, totalDuration)
+//     const outputName = `output_${index}.${action.to}`
+//     const chunkEnd = (end - start).toString()
+//     const args = [
+//       "-analyzeduration",
+//       "50M", // Reduce analyzeduration
+//       "-probesize",
+//       "20M", // Reduce probesize
+//       "-i",
+//       inputName,
+//       "-preset",
+//       "ultrafast",
+//       "-ss",
+//       start.toString(),
+//       "-t",
+//       chunkEnd,
+//       "-map_metadata",
+//       "0",
+//       "-c:v",
+//       "copy",
+//       "-c:a",
+//       "copy",
+//       "-copyts",
+//       "-c:v",
+//       "libx264", // Re-encode video for the target format
+//       "-c:a",
+//       "aac", // Re-encode audio for the target format
+//       "-pix_fmt",
+//       "yuv420p", // Set pixel format
+//       "-force_key_frames",
+//       `expr:gte(t,n_forced*${start})`, // Ensure keyframe at the start
+//       "-movflags",
+//       "frag_keyframe+empty_moov+faststart",
+//       outputName,
+//     ]
+//     let ffmpegOutput = ""
+
+//     ffmpeg.on("log", ({ message }) => {
+//       // We're interested in the error logs
+//       ffmpegOutput += message + "\n" // Capture the log output
+//     })
+
+//     // Create each chunk based on start time and duration
+//     const result = await ffmpeg.exec(args)
+//     if (result !== 0) {
+//       console.error("FFmpeg command failed with code:", result)
+//       console.error("FFmpeg log output:", ffmpegOutput)
+//       throw new Error(`FFmpeg fails with code ${result}`)
+//     }
+//     // Read the output chunk from the virtual filesystem
+//     const chunkData = ffmpeg.readFile(outputName)
+//     const outputBlob = new Blob([await chunkData], {
+//       type: action.file_type,
+//     })
+
+//     // Push the chunk Blob to the chunks array
+//     chunks.push(outputBlob)
+//     // Remove the chunk file from the virtual filesystem to free memory
+//     await ffmpeg.deleteFile(outputName)
+//     // Ensure memory is freed up
+//   }
+//   // Remove the input file from the virtual filesystem
+//   await ffmpeg.deleteFile(inputName)
+//   return chunks
+// }
 /**
  * Convert a chunk using a worker and return the result.
  * @param worker - The Worker instance to handle the conversion.
