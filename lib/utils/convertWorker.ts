@@ -9,36 +9,42 @@ interface WorkerMessage {
   ffmpegCommand: string[]
 }
 
+// FFmpeg instance to be shared across chunk processing
+const ffmpeg = new FFmpeg()
+let isFFmpegLoaded = false
+
+// Load FFmpeg only once
+async function initializeFFmpeg() {
+  if (!isFFmpegLoaded) {
+    await ffmpeg.load()
+    isFFmpegLoaded = true
+  }
+}
+
+// Message event handler for chunk processing
 self.onmessage = async function (e: MessageEvent<WorkerMessage>) {
   const { fileChunk, inputName, outputName, ffmpegCommand } = e.data
-  const ffmpeg = new FFmpeg()
 
   try {
-    await ffmpeg.load()
+    // Ensure FFmpeg is loaded once
+    await initializeFFmpeg()
 
     let log = ""
     ffmpeg.on("log", ({ message }) => {
       log += message + "\n"
     })
-    // Write the input file (chunk) to the FFmpeg virtual file system
+
+    // Write the input file (chunk) to FFmpeg's virtual file system
     await ffmpeg.writeFile(inputName, await fetchFile(fileChunk))
 
     // Execute the conversion
     await ffmpeg.exec(ffmpegCommand)
+
     // Read the converted file from FFmpeg's virtual file system
     const outputFile = await ffmpeg.readFile(outputName)
 
-    // Check if the outputFile is Uint8Array (binary data) or a string (text data)
-    if (typeof outputFile === "string") {
-      // Handle the case where the output is a string (e.g., text-based file)
-      self.postMessage({
-        success: true,
-        outputFileName: outputName,
-        log: log,
-        outputFile, // Send string file data directly
-      })
-    } else if (outputFile instanceof Uint8Array) {
-      // Handle the case where the output is Uint8Array (binary data)
+    // Handle the case where the output is Uint8Array (binary data)
+    if (outputFile instanceof Uint8Array) {
       self.postMessage(
         {
           success: true,
@@ -46,12 +52,19 @@ self.onmessage = async function (e: MessageEvent<WorkerMessage>) {
           log: log,
           outputFile, // Send Uint8Array containing the file data
         },
-        [outputFile.buffer]
-      ) // Transfer the buffer (ArrayBuffer) to avoid copying
+        [outputFile.buffer] // Transfer the buffer to avoid copying
+      )
     } else {
-      throw new Error("Unsupported file format returned from ffmpeg.readFile()")
+      // Handle the case where the output is a string (e.g., text-based file)
+      self.postMessage({
+        success: true,
+        outputFileName: outputName,
+        log: log,
+        outputFile, // Send string file data directly
+      })
     }
   } catch (error: any) {
+    // Post error message back to the main thread
     self.postMessage({
       success: false,
       error: `Conversion failed: ${error.message}`,

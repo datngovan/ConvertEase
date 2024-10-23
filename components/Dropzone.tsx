@@ -124,7 +124,7 @@ export default function Dropzone() {
     document.body.removeChild(a)
   }
   const convert = async (): Promise<any> => {
-    console.time("convert ALl")
+    console.time("convert All")
     let tmp_actions = actions.map((elt) => ({
       ...elt,
       is_converting: true,
@@ -164,7 +164,7 @@ export default function Dropzone() {
     setIsDone(true)
     setIsConverting(false)
 
-    console.timeEnd("convert ALl")
+    console.timeEnd("convert All")
   }
   const handleUpload = (data: Array<any>): void => {
     handleExitHover()

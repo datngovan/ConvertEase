@@ -34,6 +34,13 @@ function getFileExtension(file_name: string): string {
   return match && match[1] ? match[1] : ""
 }
 
+function getTypeFromMimeType(mimeType: string): string {
+  const parts = mimeType.split("/")
+  if (parts.length === 2) {
+    return parts[1] // Return the second part (the file type)
+  }
+  throw new Error("Invalid MIME type")
+}
 /**
  * Remove file extension.
  * @param file_name File name.
@@ -73,9 +80,12 @@ export default async function convertFile(
   } else {
     outputFileName = removeFileExtension(file_name) + "." + to
   }
+  console.time("convert chunks")
   const taskPromises = assignWorkerToChunk(ffmpeg, fileChunks, to)
   // Wait for all tasks to finish and collect output file names
   const convertedChunks = await Promise.all(taskPromises)
+  console.timeEnd("convert chunks")
+  console.time("combined chunks")
   // Now concatenate the chunks using FFmpeg
   const fileListName = "file_list.txt"
   const finalBlobData = await concatChunkToFinalFile(
@@ -84,6 +94,7 @@ export default async function convertFile(
     ffmpeg,
     outputFileName
   )
+  console.timeEnd("combined chunks")
   const finalBlob = new Blob([finalBlobData], { type: `video/${to}` })
   const url = URL.createObjectURL(finalBlob)
 
@@ -176,11 +187,16 @@ function assignWorkerToChunk(
   const taskPromises = fileChunks.map((chunk, i) => {
     const chunkInputFileName = `chunk_${i}.blob`
     const chunkOutputFileName = `chunk_${i}.${outputFormat}`
+    console.log("chunk: ", chunk)
+    const originalType = getTypeFromMimeType(chunk.type)
+    console.log("originalType: ", originalType)
     const ffmpeg_cmd_chunk = FfpmegCommandFactory.getFfmpegCommand(
       outputFormat ? outputFormat : "mp4",
       chunkInputFileName,
       chunkOutputFileName
+      // originalType
     )
+    console.log("ffmpeg_cmd_chunk: ", ffmpeg_cmd_chunk)
 
     return workerPool.addTask(async (worker) => {
       // Convert the chunk using the worker
@@ -325,9 +341,11 @@ async function chunkFiles(
   for (let i = 0; i < numberOfChunks; i++) {
     const start = i * chunkDuration
     const end = Math.min(start + chunkDuration, totalDuration)
-    const outputName = `output_${i}.${action.to}`
+    const outputName = `output_${i}.${action.from}`
+    console.log("action: ", action)
     const chunkEnd = (end - start).toString()
 
+    // No re-encoding, just copying the original streams
     const args = [
       "-analyzeduration",
       "50M",
@@ -344,9 +362,9 @@ async function chunkFiles(
       "-map_metadata",
       "0",
       "-c:v",
-      "copy",
+      "copy", // Copy video stream without re-encoding
       "-c:a",
-      "copy",
+      "copy", // Copy audio stream without re-encoding
       outputName,
     ]
 
