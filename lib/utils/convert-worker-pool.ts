@@ -1,4 +1,4 @@
-export class WorkerPool {
+export class ConvertWorkerPool {
   public workers: Worker[] = []
   public taskQueue: (() => Promise<any>)[] = []
   private activeTasks: number = 0
@@ -14,7 +14,7 @@ export class WorkerPool {
     //   ? new URL("./chunk.worker.ts", import.meta.url)
     //   : new URL("./convert.worker.ts", import.meta.url)
     for (let i = 0; i < this.maxWorkers; i++) {
-      const worker = new Worker(new URL("./chunk.worker.ts", import.meta.url))
+      const worker = new Worker(new URL("./convert.worker.ts", import.meta.url))
       this.workers.push(worker)
     }
     console.log("this.chunk: ", this.workers)

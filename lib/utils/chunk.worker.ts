@@ -1,12 +1,9 @@
-// chunkWorker.ts
-
 /// <reference lib="webworker" />
 import { Action } from "@/type"
 import { FFmpeg } from "@ffmpeg/ffmpeg"
-import { fetchFile } from "@ffmpeg/util"
 
 interface WorkerMessage {
-  inputBuffer: ArrayBuffer
+  file: File
   chunkIndex: number
   chunkDuration: number
   totalDuration: number
@@ -14,20 +11,23 @@ interface WorkerMessage {
 }
 
 self.onmessage = async function (e: MessageEvent<WorkerMessage>) {
-  const { inputBuffer, chunkIndex, chunkDuration, totalDuration, action } =
-    e.data
+  const { file, chunkIndex, chunkDuration, totalDuration, action } = e.data
+  console.log({ file, chunkIndex, chunkDuration, totalDuration, action })
   const ffmpeg = new FFmpeg()
 
   try {
     await ffmpeg.load()
 
-    const inputName = `input_${chunkIndex}.${action.file_type}`
+    const inputName = `input_${chunkIndex}.${action.from}`
+    const inputBuffer = await file.arrayBuffer()
     ffmpeg.writeFile(inputName, new Uint8Array(inputBuffer))
 
     const start = chunkIndex * chunkDuration
     const end = Math.min(start + chunkDuration, totalDuration)
     const chunkEnd = (end - start).toString()
-    const outputName = `output_${chunkIndex}.${action.to}`
+    console.log(action)
+    const outputName = `output_${chunkIndex}.${action.from}`
+    console.log("outputName: ", outputName)
 
     const args = [
       "-analyzeduration",
@@ -42,26 +42,38 @@ self.onmessage = async function (e: MessageEvent<WorkerMessage>) {
       start.toString(),
       "-t",
       chunkEnd,
+      "-map_metadata",
+      "0",
       "-c:v",
-      "copy",
+      "libx264", // Use H.264 video encoding
       "-c:a",
-      "copy",
+      "aac", // Use AAC audio encoding
       outputName,
     ]
 
+    let log = ""
+    ffmpeg.on("log", ({ message }) => {
+      log += message + "\n"
+    })
     await ffmpeg.exec(args)
+    console.log(log)
 
     const outputChunk = await ffmpeg.readFile(outputName)
+
+    // Create a Blob from the Uint8Array and pass it to the main thread
+    const outputBlob = new Blob([outputChunk], { type: action.file_type })
 
     self.postMessage(
       {
         success: true,
+        outputName,
         chunkIndex,
-        chunk: outputChunk,
+        chunk: outputBlob, // Pass Blob instead of Uint8Array
       },
-      [outputChunk]
-    ) // Transfer the buffer to avoid cloning
+      []
+    ) // No need to transfer Blob buffers, just pass the Blob object itself
 
+    // Clean up virtual file system to free memory
     await ffmpeg.deleteFile(inputName)
     await ffmpeg.deleteFile(outputName)
   } catch (error: any) {

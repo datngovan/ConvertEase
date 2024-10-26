@@ -24,7 +24,7 @@ async function initializeFFmpeg() {
 // Message event handler for chunk processing
 self.onmessage = async function (e: MessageEvent<WorkerMessage>) {
   const { fileChunk, inputName, outputName, ffmpegCommand } = e.data
-
+  console.log(ffmpegCommand)
   try {
     // Ensure FFmpeg is loaded once
     await initializeFFmpeg()
@@ -33,16 +33,19 @@ self.onmessage = async function (e: MessageEvent<WorkerMessage>) {
     ffmpeg.on("log", ({ message }) => {
       log += message + "\n"
     })
-
+    console.time("write input")
     // Write the input file (chunk) to FFmpeg's virtual file system
     await ffmpeg.writeFile(inputName, await fetchFile(fileChunk))
-
+    console.timeEnd("write input")
+    console.time("exc input")
     // Execute the conversion
     await ffmpeg.exec(ffmpegCommand)
-
+    console.timeEnd("exc input")
+    console.time("read out")
     // Read the converted file from FFmpeg's virtual file system
     const outputFile = await ffmpeg.readFile(outputName)
-
+    console.timeEnd("read out")
+    console.time("send out")
     // Handle the case where the output is Uint8Array (binary data)
     if (outputFile instanceof Uint8Array) {
       self.postMessage(
@@ -70,4 +73,8 @@ self.onmessage = async function (e: MessageEvent<WorkerMessage>) {
       error: `Conversion failed: ${error.message}`,
     })
   }
+  console.timeEnd("send out")
+  // Cleanup after chunk processing
+  await ffmpeg.deleteFile(inputName)
+  await ffmpeg.deleteFile(outputName)
 }

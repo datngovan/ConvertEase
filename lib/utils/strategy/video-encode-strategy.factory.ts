@@ -9,11 +9,12 @@ import {
   TheoraVorbisStrategy,
   VP8VorbisStrategy,
   WMVStrategy,
+  XvidMP3Strategy,
 } from "./video-encode.strategy"
 
 // Define the codec groups
-const H264AACGroup = ["mp4", "m4v", "mp4v", "mov", "3gp", "3g2", "avi"]
-// const XvidMP3Group = ["avi"]
+const H264AACGroup = ["mp4", "m4v", "mp4v", "mov", "3gp", "3g2"]
+const XvidMP3Group = ["avi"]
 const VP8VorbisGroup = ["webm"]
 const H264AACMP3Group = ["mkv"]
 const WMVGroup = ["wmv"]
@@ -37,10 +38,9 @@ export class EncodingStrategyFactory {
       case "mov":
       case "3gp":
       case "3g2":
-      case "avi":
         return new H264AACStrategy()
-      // case "avi":
-      //   return new XvidMP3Strategy()
+      case "avi":
+        return new XvidMP3Strategy()
       case "webm":
         return new VP8VorbisStrategy()
       case "mkv":
@@ -68,7 +68,7 @@ export class EncodingStrategyFactory {
   ): boolean {
     const codecGroups = [
       H264AACGroup,
-      // XvidMP3Group,
+      XvidMP3Group,
       VP8VorbisGroup,
       H264AACMP3Group,
       WMVGroup,

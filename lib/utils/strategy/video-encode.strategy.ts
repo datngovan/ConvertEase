@@ -15,25 +15,25 @@ export class H264AACStrategy implements EncodingStrategy {
   }
 }
 
-// export class XvidMP3Strategy implements EncodingStrategy {
-//   setAudioCodec(): string[] {
-//     // Use 'libmp3lame' instead of 'mp3' for better compatibility with FFmpeg
-//     return ["-c:a", "libmp3lame"]
-//   }
-
-//   setVideoCodec(): string[] {
-//     // Use 'libxvid' instead of 'xvid' for video
-//     return ["-c:v", "libxvid"]
-//   }
-// }
-
-export class VP8VorbisStrategy implements EncodingStrategy {
+export class XvidMP3Strategy implements EncodingStrategy {
   setAudioCodec(): string[] {
-    return ["-c:a", "libvorbis"]
+    // Use 'libmp3lame' instead of 'mp3' for better compatibility with FFmpeg
+    return ["-c:a", "libmp3lame"]
   }
 
   setVideoCodec(): string[] {
-    return ["-c:v", "vp8"]
+    // Use 'libxvid' instead of 'xvid' for video
+    return ["-c:v", "libx264", "-f", "avi"]
+  }
+}
+
+export class VP8VorbisStrategy implements EncodingStrategy {
+  setAudioCodec(): string[] {
+    return ["-c:a", "libopus"]
+  }
+
+  setVideoCodec(): string[] {
+    return ["-c:v", "libvpx-vp9"]
   }
 }
 
