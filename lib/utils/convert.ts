@@ -1,5 +1,6 @@
 import { Action } from "@/type"
 import { FFmpeg } from "@ffmpeg/ffmpeg"
+import { fetchFile } from "@ffmpeg/util"
 import mediaInfoFactory from "mediainfo.js"
 
 import { FfpmegCommandFactory } from "./command-factory"
@@ -83,64 +84,83 @@ export default async function convertFile(
   ffmpeg: FFmpeg,
   action: Action
 ): Promise<convertOutput> {
-  console.time("convert")
-  const { to, file_name } = action
-  const format = await getFileMetadata(action.file)
-  console.log("format: ", format)
-  console.time("get duration")
-  const duration1 = await getTimeMetadata(action.file)
-  console.log("meta data: ", duration1)
-  console.timeEnd("get duration")
-  const chunkDuration = Math.ceil(duration1 / 5)
-  console.time("get chunks")
-  const fileChunks = await chunkFiles(ffmpeg, chunkDuration, duration1, action)
-  console.log("fileChunks: ", fileChunks)
-  console.timeEnd("get chunks")
-  console.time("get chunks with Workers")
-  const fileChunksWithWorker = await chunkFiles(
-    ffmpeg,
-    chunkDuration,
-    duration1,
-    action
-  )
-  console.log("fileChunksWithWorker: ", fileChunksWithWorker)
-  console.timeEnd("get chunks with Workers")
-  let outputFileName = ""
+  if (action.file_type.includes("image")) {
+    const { file, to, file_name, file_type } = action
+    const input = getFileExtension(file_name)
+    const output = removeFileExtension(file_name) + "." + to
+    ffmpeg.writeFile(input, await fetchFile(file))
+    const ffmpeg_cmd = ["-i", input, output]
+    await ffmpeg.exec(ffmpeg_cmd)
 
-  if (to === "mp4v") {
-    outputFileName = removeFileExtension(file_name) + "." + "mp4"
+    const data = (await ffmpeg.readFile(output)) as any
+    const blob = new Blob([data], { type: file_type.split("/")[0] })
+    const url = URL.createObjectURL(blob)
+    return { url, output }
   } else {
-    outputFileName = removeFileExtension(file_name) + "." + to
-  }
-  console.time("convert chunks")
-  const taskPromises = assignWorkerToChunk(ffmpeg, fileChunks, to)
-  console.timeEnd("convert chunks")
-  // Wait for all tasks to finish and collect output file names
-  console.time("resolved chunks")
-  const convertedChunks = await Promise.all(taskPromises)
-  console.timeEnd("resolved chunks")
-  console.time("combined chunks")
-  // Now concatenate the chunks using FFmpeg
-  const fileListName = "file_list.txt"
-  const finalBlobData = await concatChunkToFinalFile(
-    fileListName,
-    convertedChunks,
-    ffmpeg,
-    outputFileName
-  )
-  console.timeEnd("combined chunks")
-  const finalBlob = new Blob([finalBlobData], { type: `video/${to}` })
-  const url = URL.createObjectURL(finalBlob)
+    console.time("convert")
+    const { to, file_name } = action
+    const format = await getFileMetadata(action.file)
+    console.log("format: ", format)
+    console.time("get duration")
+    const duration1 = await getTimeMetadata(action.file)
+    console.log("meta data: ", duration1)
+    console.timeEnd("get duration")
+    const chunkDuration = Math.ceil(duration1 / 5)
+    console.time("get chunks")
+    const fileChunks = await chunkFiles(
+      ffmpeg,
+      chunkDuration,
+      duration1,
+      action
+    )
+    console.log("fileChunks: ", fileChunks)
+    console.timeEnd("get chunks")
+    console.time("get chunks with Workers")
+    const fileChunksWithWorker = await chunkFiles(
+      ffmpeg,
+      chunkDuration,
+      duration1,
+      action
+    )
+    console.log("fileChunksWithWorker: ", fileChunksWithWorker)
+    console.timeEnd("get chunks with Workers")
+    let outputFileName = ""
 
-  // Clean up intermediate files
-  for (const chunkFile of convertedChunks) {
-    await ffmpeg.deleteFile(chunkFile)
-  }
-  await ffmpeg.deleteFile(fileListName)
+    if (to === "mp4v") {
+      outputFileName = removeFileExtension(file_name) + "." + "mp4"
+    } else {
+      outputFileName = removeFileExtension(file_name) + "." + to
+    }
+    console.time("convert chunks")
+    const taskPromises = assignWorkerToChunk(ffmpeg, fileChunks, to)
+    console.timeEnd("convert chunks")
+    // Wait for all tasks to finish and collect output file names
+    console.time("resolved chunks")
+    const convertedChunks = await Promise.all(taskPromises)
+    console.timeEnd("resolved chunks")
+    console.time("combined chunks")
+    // Now concatenate the chunks using FFmpeg
+    const fileListName = "file_list.txt"
+    const finalBlobData = await concatChunkToFinalFile(
+      fileListName,
+      convertedChunks,
+      ffmpeg,
+      outputFileName
+    )
+    console.timeEnd("combined chunks")
+    const finalBlob = new Blob([finalBlobData], { type: `video/${to}` })
+    const url = URL.createObjectURL(finalBlob)
 
-  console.timeEnd("convert")
-  // Return the URL to the reassembled file
-  return { url, output: outputFileName }
+    // Clean up intermediate files
+    for (const chunkFile of convertedChunks) {
+      await ffmpeg.deleteFile(chunkFile)
+    }
+    await ffmpeg.deleteFile(fileListName)
+
+    console.timeEnd("convert")
+    // Return the URL to the reassembled file
+    return { url, output: outputFileName }
+  }
 }
 
 /**
