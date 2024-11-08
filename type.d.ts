@@ -10,4 +10,5 @@ export type Action = {
   is_error?: boolean
   url?: any
   output?: any
+  reencodeFirstChunk?: boolean
 }

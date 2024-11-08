@@ -79,7 +79,6 @@ export default function Dropzone() {
   const [is_done, setIsDone] = useState<boolean>(false)
   const ffmpegRef = useRef<any>(null)
   const [defaultValues, setDefaultValues] = useState<string>("video")
-  const [selected, setSelected] = useState<string>("...")
   const accepted_files = {
     "image/*": [
       ".jpg",
@@ -125,7 +124,7 @@ export default function Dropzone() {
     document.body.removeChild(a)
   }
   const convert = async (): Promise<any> => {
-    console.log(1, actions)
+    console.time("convert All")
     let tmp_actions = actions.map((elt) => ({
       ...elt,
       is_converting: true,
@@ -164,6 +163,8 @@ export default function Dropzone() {
     }
     setIsDone(true)
     setIsConverting(false)
+
+    console.timeEnd("convert All")
   }
   const handleUpload = (data: Array<any>): void => {
     handleExitHover()

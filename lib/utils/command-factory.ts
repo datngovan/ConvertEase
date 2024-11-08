@@ -1,10 +1,19 @@
+import { EncodingStrategyFactory } from "./strategy/video-encode-strategy.factory"
+
 // FfpmegCommandFactory.ts
 export class FfpmegCommandFactory {
   static getFfmpegCommand(
     format: string,
     inputFileName: string,
-    outputFileName: string
+    outputFileName: string,
+    originalType: string
   ): string[] {
+    // Get the encoding strategy based on input and target types
+    const strategy = EncodingStrategyFactory.getStrategy(originalType, format)
+
+    // Get the audio and video codec flags from the strategy
+    const audioCodecFlags = strategy.setAudioCodec()
+    const videoCodecFlags = strategy.setVideoCodec()
     switch (format) {
       case "m4v":
         return [
@@ -14,6 +23,10 @@ export class FfpmegCommandFactory {
           "mpeg4", // MPEG-4 Visual codec for MP4V
           "-acodec",
           "aac", // AAC codec for audio
+          "-preset",
+          "ultrafast",
+          ...audioCodecFlags,
+          ...videoCodecFlags,
           outputFileName,
         ]
       case "3gp":
@@ -36,6 +49,10 @@ export class FfpmegCommandFactory {
           "8000",
           "-ab",
           "24k",
+          "-preset",
+          "ultrafast",
+          ...audioCodecFlags,
+          ...videoCodecFlags,
           outputFileName,
         ]
       case "3g2":
@@ -56,10 +73,20 @@ export class FfpmegCommandFactory {
           "8000", // Sample rate for mobile audio
           "-ab",
           "24k", // Set audio bitrate
+          "-preset",
+          "ultrafast",
+          ...audioCodecFlags,
+          ...videoCodecFlags,
           outputFileName,
         ]
       default:
-        return ["-i", inputFileName, outputFileName] // Default command for unknown formats
+        return [
+          "-i",
+          inputFileName,
+          ...audioCodecFlags,
+          ...videoCodecFlags,
+          outputFileName,
+        ] // Default command for unknown formats
     }
   }
 }
