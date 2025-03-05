@@ -119,7 +119,9 @@ export const reducer = (state: State, action: Action): State => {
       }
       return {
         ...state,
-        toasts: state.toasts.filter((t) => t.id !== action.toastId),
+        toasts: Array.isArray(state.toasts)
+          ? state.toasts.filter((t) => t.id !== action.toastId)
+          : [],
       }
   }
 }
