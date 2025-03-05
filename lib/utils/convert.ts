@@ -84,6 +84,7 @@ export default async function convertFile(
   ffmpeg: FFmpeg,
   action: Action
 ): Promise<convertOutput> {
+  console.log(action.file_type.includes("image"))
   if (action.file_type.includes("image")) {
     const { file, to, file_name, file_type } = action
     const input = getFileExtension(file_name)
@@ -335,6 +336,21 @@ async function getFileDuration(
   await ffmpeg.deleteFile(inputFileName)
   return totalDuration // Return the duration in seconds
 }
+// Define the specific track types that may contain a Duration property
+interface VideoTrack {
+  "@type": "Video"
+  Duration?: number
+}
+
+interface AudioTrack {
+  "@type": "Audio"
+  Duration?: number
+}
+
+interface GeneralTrack {
+  "@type": "General"
+  Duration?: number
+}
 
 /**
  * Get the duration and other metadata of a media file using MediaInfo.js.
@@ -359,34 +375,20 @@ export async function getTimeMetadata(file: File) {
     }
   )
   // Ensure result.media and tracks are defined
-  if (!result.media || !result.media.track) {
+  const res = result.media
+  if (!res || !res.track) {
     throw new Error("Media information is not available.")
   }
-  const generalTrack = result.media.track.find(
-    (track) => track["@type"] === "General"
+  const generalTrack = res.track.find(
+    (track): track is GeneralTrack => track["@type"] === "General"
   )
+  console.log("generalTrack: ", generalTrack)
   if (!generalTrack || !generalTrack.Duration) {
     throw new Error("Duration not found in the 'General' track")
   }
   // Return the duration in seconds (it's already provided in seconds in your data)
   const durationInSeconds = generalTrack.Duration
   return durationInSeconds
-}
-
-// Define the specific track types that may contain a Duration property
-interface VideoTrack {
-  "@type": "Video"
-  Duration?: number
-}
-
-interface AudioTrack {
-  "@type": "Audio"
-  Duration?: number
-}
-
-interface GeneralTrack {
-  "@type": "General"
-  Duration?: number
 }
 
 // Function to extract metadata using MediaInfo.js
@@ -404,6 +406,7 @@ async function getFileMetadata(file: File) {
       return new Uint8Array(arrayBuffer)
     }
   )
+  console.log("META DATA: ", result)
 
   // Ensure media and tracks exist
   if (!result.media || !result.media.track) {
